@@ -133,3 +133,34 @@ class LogoutAPIView(APIView):
 
 
 
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.tokens import OutstandingToken
+
+class UserLogoutAPIView(APIView):
+  
+    authentication_classes = [JWTAuthentication]
+
+    def post(self, request, *args, **kwargs):
+        try:
+            # Blacklist the currently used access token
+            token = request.auth
+            if token:
+                token.blacklist()
+                return Response({"detail": "Successfully logged out."}, status=status.HTTP_200_OK)
+            else:
+                return Response({"detail": "No token provided."}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"detail": "Failed to logout."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+class CategoryListCreateAPIView(generics.ListCreateAPIView):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    permission_classes = [IsAdminUser]
+
+class BudgetCreateAPIView(generics.CreateAPIView):
+    serializer_class = BudgetSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)

@@ -14,10 +14,17 @@ class UserProfile(AbstractUser):
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
     otp = models.CharField(max_length=6, blank=True)
     otp_verified = models.BooleanField(default=False)
-    date_of_birth = models.DateField(blank=True,null=True)
-    address = models.TextField(blank=True)
-    phone_number = models.CharField(max_length=15,blank=True)
-    branch = models.CharField(max_length=100)
+    date_of_birth = models.DateField(blank=True, null=True)
+    address = models.TextField()
+    phone_number = models.CharField(max_length=15)
+    
+    GENDER_CHOICES = (
+        ('Male', 'Male'),
+        ('Female', 'Female'),
+        ('Other', 'Other'),
+    )
+    gender = models.CharField(max_length=20,choices=GENDER_CHOICES)
+    occupation = models.CharField(max_length=50)
     email_errors = {
         "required": "Email is required",
         "invalid": "Enter a valid email without spaces",
@@ -63,3 +70,14 @@ class UserProfile(AbstractUser):
         return f"{self.username}"
     
 
+
+class Category(models.Model):
+    name = models.CharField(max_length=100)
+
+class Budget(models.Model):
+    user = models.ForeignKey(UserProfile, on_delete=models.CASCADE)
+    category = models.ForeignKey(Category, on_delete=models.CASCADE)
+    total_budget = models.DecimalField(max_digits=15, decimal_places=2)
+    description = models.CharField(max_length=255, blank=True, null=True)
+    start_date = models.DateField()
+    end_date = models.DateField()

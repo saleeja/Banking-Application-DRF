@@ -2,11 +2,15 @@ from django.urls import path
 from .views import *
 
 
+
 urlpatterns = [
-    path('account/create/', AccountCreateAPIView.as_view(), name='account-create'),
-    path('accounts/balance/<int:pk>/', AccountDetailAPIView.as_view(), name='account-detail'),
+    
+    path('create/', CreateAccountAPIView.as_view(), name='create-account'),
+    path('opened-accounts/', OpenedAccountListAPIView.as_view(), name='opened-account-list'),
+    path('account/balance/', AccountBalanceAPIView.as_view(), name='account_balance'),
+    path('accounts/<int:pk>/balance/', AccountBalanceAPIView.as_view(), name='account-balance'),
     path('accounts/deposit/', DepositFundsAPIView.as_view(), name='deposit_funds'),
-    path('accounts/withdraw/', WithdrawFundsAPIView.as_view(), name='withdraw_funds'),
+    path('accounts/withdraw/', WithdrawAPIView.as_view(), name='withdraw_funds'),
     path('accounts/transfer/', FundTransferAPIView.as_view(), name='fund_transfer'),
     path('transactions/', TransactionListAPIView.as_view(), name='transaction-list'),
 ]
