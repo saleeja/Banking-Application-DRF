@@ -9,11 +9,11 @@ from django.core.exceptions import ValidationError
 from random import randint
 from django.db import transaction
 from django.utils import timezone
-from datetime import timedelta
-from datetime import date
-from django.db.models import F
-from django.db.models import Sum
-
+from datetime import timedelta,date
+from django.db.models import F,Sum
+from django.core.mail import send_mail
+from django.conf import settings
+from django.shortcuts import get_object_or_404
 
 
 class CreateAccountAPIView(APIView):
@@ -56,14 +56,19 @@ class CreateAccountAPIView(APIView):
                     account = serializer.save()
 
                     if account_type in ['savings', 'current']:
-
                         if account_type == 'savings':
-                            SavingAccount.objects.create(account=account)
+                            account_serializer = SavingsAccountSerializer(data=request.data)
                         elif account_type == 'current':
-                            CurrentAccount.objects.create(account=account)
+                            account_serializer = CurrentAccountSerializer(data=request.data)
                         
-                        return Response({'your account number': account_number, 'message': 'Account created successfully'}, status=status.HTTP_201_CREATED)
-
+                        if account_serializer.is_valid():
+                            account_serializer.validated_data['account'] = account
+                            account_serializer.save()
+                            return Response({'your account number': account_number, 'message': 'Account created successfully'}, status=status.HTTP_201_CREATED)
+                        else:
+                            account.delete()
+                            return Response(account_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                        
                     if account_type in ['fixed_deposit', 'recurring_deposit']:
                         source_account_number = request.data.get('account_number')
                         source_account_type = self.get_account_type(source_account_number)
@@ -83,7 +88,7 @@ class CreateAccountAPIView(APIView):
                             serializer.validated_data['source_account_id'] = source_account_id
     
                             deposit_account_instance = serializer.save()
-                            return Response({'account_number': account_number, 'message': 'Account created successfully'}, status=status.HTTP_201_CREATED)
+                            return Response({'Reference Number': account_number, 'message': 'Account created successfully'}, status=status.HTTP_201_CREATED)
                         else:
                             account.delete()
                             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -217,6 +222,7 @@ class WithdrawAPIView(APIView):
 class FundTransferAPIView(APIView):
     @transaction.atomic
     def post(self, request):
+        
         sender_account_id = request.data.get('sender')
         receiver_account_number = request.data.get('receiver')
         amount = request.data.get('amount')
@@ -228,8 +234,7 @@ class FundTransferAPIView(APIView):
             return Response({"error": "Sender or receiver account does not exist"}, status=status.HTTP_404_NOT_FOUND)
 
         if sender_account.account_type in ['fixed_deposit', 'recurring_deposit']:
-            return Response({"error": "Cannot transfer funds from fixed or recurring accounts"}, status=status.HTTP_400_BAD_REQUEST)
-
+            return Response({"error": "Cannot transfer funds from f{account_type}"}, status=status.HTTP_400_BAD_REQUEST)
         if sender_account.account_type == 'savings':
             today = date.today()
             month_transactions = Transaction.objects.filter(sender=sender_account, transaction_date__month=today.month).count()
@@ -254,8 +259,9 @@ class FundTransferAPIView(APIView):
         receiver_account.amount += amount
         receiver_account.save()
 
-        transaction_instance = Transaction.objects.create(sender=sender_account, receiver=receiver_account, amount=amount)
+        transaction_instance = Transaction.objects.create( sender=sender_account, receiver=receiver_account, amount=amount,user=request.user)
         serializer = TransactionSerializer(transaction_instance)
+
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -263,3 +269,82 @@ class FundTransferAPIView(APIView):
 class TransactionListAPIView(generics.ListAPIView):
     queryset = Transaction.objects.all()
     serializer_class = TransactionSerializer
+
+
+class AccountInfoAPIView(generics.ListCreateAPIView):
+    queryset = AccountInfo.objects.all()
+    serializer_class = AccountInfoSerializer
+    permission_classes = [IsAdminUser]
+
+    def perform_create(self, serializer):
+        serializer.save() 
+
+
+class AccountInfoDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = AccountInfo.objects.all()
+    serializer_class = AccountInfoSerializer
+    permission_classes = [IsAdminUser] 
+# -----------------------------------------------------------------------------------------------------------------------------------------------------<>
+                                    # LOANApplication
+# -----------------------------------------------------------------------------------------------------------------------------------------------------<>
+
+
+class LoanTypeCreate(generics.ListCreateAPIView):
+    queryset = LoanType.objects.all()
+    serializer_class = LoanTypeSerializer
+    permission_classes = [IsAdminUser]  
+
+
+class LoanApplicationCreate(generics.ListCreateAPIView):
+    queryset = LoanApplication.objects.all()
+    serializer_class = LoanApplicationSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class LoanApplicationApproval(generics.UpdateAPIView):
+    queryset = LoanApplication.objects.all()
+    serializer_class = LoanApplicationSerializer
+    permission_classes = [IsAdminUser]  
+
+    def perform_update(self, serializer):
+        status = self.request.data.get('status')
+        if status:
+            serializer.validated_data['status'] = status
+            
+            # Send email notification to the user
+            loan_application = serializer.instance
+            user_email = loan_application.user.email
+            subject = "Loan Application Status Update"
+            message = f"Dear {loan_application.user.username},\n\nYour loan application is {status}.\n\nRegards,\n Secure Assets Finance"
+            send_mail(subject, message, settings.EMAIL_HOST_USER, [user_email], fail_silently=False)
+
+        serializer.save()
+
+
+class LoanApplicationList(generics.ListAPIView):
+    queryset = LoanApplication.objects.order_by('-application_date')
+    serializer_class = LoanListSerializer
+    permission_classes = [IsAdminUser]  
+
+
+class UserLoanApplicationList(generics.ListAPIView):
+    serializer_class = LoanApplicationSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        return LoanApplication.objects.filter(user=user)
+
+    
+class UserLoanApplicationDetail(generics.RetrieveAPIView):
+    serializer_class = LoanApplicationSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        return LoanApplication.objects.filter(user=user)
+
+    def get_object(self):
+        queryset = self.get_queryset()
+        obj = get_object_or_404(queryset, id=self.kwargs['pk'])
+        return obj

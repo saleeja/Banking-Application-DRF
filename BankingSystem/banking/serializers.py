@@ -7,6 +7,7 @@ class AccountSerializer(serializers.ModelSerializer):
         model = Account
         exclude = ['account_number','user']
 
+
 class SavingsAccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = SavingAccount
@@ -58,7 +59,6 @@ class RecurringDepositAccountSerializer(serializers.ModelSerializer):
         return value
 
 
-
 class AccountBalanceSerializer(serializers.ModelSerializer):
     amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     message = serializers.SerializerMethodField()
@@ -70,10 +70,17 @@ class AccountBalanceSerializer(serializers.ModelSerializer):
     def get_message(self, instance):
         return f"Your balance for {instance.account_type} account is Rs. {instance.amount}"
 
+
 class AllAccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = Account
         fields = ['account_number', 'account_type']
+
+
+class AccountInfoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AccountInfo
+        fields = '__all__'
 
 
 class TransactionSerializer(serializers.ModelSerializer):
@@ -89,3 +96,36 @@ class WithdrawalSerializer(serializers.Serializer):
         if value <= 0:
             raise serializers.ValidationError("Amount must be greater than zero.")
         return value
+
+# -----------------------------------------------------------------------------------------------
+
+class LoanApplicationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoanApplication
+        fields = ['loan_type','amount','monthly_income']
+
+    def validate_amount(self, value):
+        min_amount = 15000
+        max_amount = 10000000
+
+        if value < min_amount:
+            raise serializers.ValidationError("The maximum loan amount you can apply for is 15,000.")
+        elif value > max_amount:
+            raise serializers.ValidationError("The loan amount must not exceed ₹1 crore.")
+
+        return value
+   
+        
+class LoanTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoanType
+        fields = '__all__'
+
+
+class LoanListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoanApplication
+        fields = '__all__'
+
+
+

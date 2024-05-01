@@ -19,10 +19,11 @@ INSTALLED_APPS = [
 
     'accounts',
     'banking',
-    'financial_services',
-    'custom_admin',
+
  
     'rest_framework',
+    "django_extensions",
+
 ]
 
 MIDDLEWARE = [
@@ -54,8 +55,6 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'BankingSystem.wsgi.application'
-
-
 
 
 DATABASES = {

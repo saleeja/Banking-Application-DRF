@@ -5,9 +5,11 @@ from django.contrib.auth.hashers import check_password
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
+    is_staff = models.BooleanField(default=False)
+
     class Meta:
         model = UserProfile
-        fields = ('id', 'first_name', 'last_name','username', 'email', 'password')
+        fields = ('id', 'first_name', 'last_name','username', 'email', 'password',"is_approved",'is_staff')
         extra_kwargs = {
             'password': {'write_only': True},
             'role': {'required': False},
@@ -24,7 +26,6 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         validated_data['password'] = make_password(validated_data['password'])
         user = UserProfile.objects.create(**validated_data)
         return user
-    
 
 class UserLoginSerializer(serializers.Serializer):
     username = serializers.CharField()
@@ -36,7 +37,7 @@ class UserLoginSerializer(serializers.Serializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
-        fields = ['id', 'username', 'email', 'role']
+        fields = ['id', 'username', 'email']
 
 
 
@@ -56,3 +57,9 @@ class BudgetSerializer(serializers.ModelSerializer):
     class Meta:
         model = Budget
         exclude = ['user']
+
+
+class GoalSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Goal
+        fields = '__all__'
