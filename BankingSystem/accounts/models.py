@@ -7,6 +7,9 @@ import re
 from django.core.mail import send_mail
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+import datetime
+from dateutil.relativedelta import relativedelta
+
 
 class UserProfile(AbstractUser):
     is_approved = models.BooleanField(default=False)
@@ -82,19 +85,30 @@ class Budget(models.Model):
     def __str__(self):
         return self.category
 
+
 #-------------------------------------Savings Goals:-------------------------------------------------------------
 
+
 class Goal(models.Model):
-    user = models.ForeignKey(UserProfile, on_delete=models.CASCADE)
+    user = models.ForeignKey('accounts.UserProfile', on_delete=models.CASCADE)
+    account = models.ForeignKey('banking.Account', on_delete=models.CASCADE)
+
     name = models.CharField(max_length=100)
-    target_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    tenure_for_dream = models.DecimalField(max_digits=10, decimal_places=2)
     current_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    deadline = models.DateField()
+    years = models.IntegerField(default=0) 
+    months = models.IntegerField(default=0) 
+
+    def get_deadline(self):
+        """Calculate and return the deadline based on years and months."""
+        today = datetime.date.today()
+        deadline = today + relativedelta(years=self.years, months=self.months)
+        return deadline
 
 
 @receiver(post_save, sender=Goal)
 def milestone_reached_notification(sender, instance, created, **kwargs):
-    if instance.current_amount >= instance.target_amount:
+    if instance.current_amount >= instance.tenure_for_dream:
         send_email_notification(instance.user.email, instance.name)
 
 def send_email_notification(user_email, goal_name):

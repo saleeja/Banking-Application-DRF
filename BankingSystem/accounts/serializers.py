@@ -12,7 +12,6 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         fields = ('id', 'first_name', 'last_name','username', 'email', 'password',"is_approved",'is_staff')
         extra_kwargs = {
             'password': {'write_only': True},
-            'role': {'required': False},
             'otp': {'required': False},
             'otp_verified': {'required': False},
             'date_of_birth': {'required': False},
@@ -27,6 +26,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         user = UserProfile.objects.create(**validated_data)
         return user
 
+
 class UserLoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
@@ -38,7 +38,6 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = ['id', 'username', 'email']
-
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):
@@ -53,6 +52,7 @@ class CategorySerializer(serializers.ModelSerializer):
         model = Category
         fields = '__all__'
 
+
 class BudgetSerializer(serializers.ModelSerializer):
     class Meta:
         model = Budget
@@ -62,4 +62,4 @@ class BudgetSerializer(serializers.ModelSerializer):
 class GoalSerializer(serializers.ModelSerializer):
     class Meta:
         model = Goal
-        fields = '__all__'
+        exclude = ['user']

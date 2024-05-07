@@ -12,6 +12,9 @@ from .models import *
 import random
 import string
 from .permissions import IsStaffUser
+from django.db.models import Q
+from rest_framework.pagination import LimitOffsetPagination
+from banking.models import Account
 
 
 class UserRegistrationView(APIView):
@@ -33,7 +36,6 @@ class UserRegistrationView(APIView):
     def post(self, request, *args, **kwargs):
         serializer = self.serializer_class(data=request.data)
         if serializer.is_valid():
-            # Check if the registration is for staff
             is_staff = serializer.validated_data.get('is_staff', False)
             # Generate OTP and send email
             otp = self.generate_otp() 
@@ -101,6 +103,8 @@ class UserLoginAPIView(APIView):
 class StaffApprovalView(generics.ListCreateAPIView):
     queryset = UserProfile.objects.filter(is_staff=True, is_approved=False)
     serializer_class = UserProfileSerializer
+    permission_classes = [IsAdminUser]
+
 
     def post(self, request, *args, **kwargs):
         staff_id = request.data.get('staff_id')
@@ -131,9 +135,23 @@ class StaffApprovalView(generics.ListCreateAPIView):
 
 
 class UserProfileListView(generics.ListAPIView):
-    queryset = UserProfile.objects.all()
     serializer_class = UserProfileSerializer
     permission_classes = [IsAdminUser | IsStaffUser]
+    search_fields = ['first_name', 'email']
+    pagination_class = LimitOffsetPagination
+
+    def get_queryset(self):
+        queryset = UserProfile.objects.all()
+        search_query = self.request.query_params.get('search', None)
+        
+        if search_query:
+            queryset = queryset.filter(
+                Q(first_name__icontains=search_query) | Q(email__icontains=search_query)
+            )
+
+        queryset = queryset.exclude(is_staff=True).exclude(is_superuser=True)
+
+        return queryset
 
 
 class UserProfileDeleteView(generics.DestroyAPIView):
@@ -165,30 +183,34 @@ class UserUpdateDetail(generics.RetrieveUpdateAPIView):
         serializer.save()
 
 
+class StaffProfileListView(generics.ListAPIView):
+    serializer_class = UserProfileSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = LimitOffsetPagination
+    search_fields = ['first_name', 'email']
+
+    def get_queryset(self):
+        queryset = UserProfile.objects.filter(is_staff=True, is_superuser=False)
+        staff_user_ids = queryset.values_list('id', flat=True)
+        queryset = UserProfile.objects.filter(id__in=staff_user_ids, is_staff=True)
+
+
+        search_query = self.request.query_params.get('search')
+        if search_query:
+            queryset = queryset.filter(
+                Q(first_name__icontains=search_query) |
+                Q(email__icontains=search_query)
+            )
+
+        return queryset
+    
+
 class LogoutAPIView(APIView):
     def post(self, request):
         return Response({"message": "Logout successful"}, status=status.HTTP_200_OK)
 
 
-# from rest_framework_simplejwt.authentication import JWTAuthentication
-
-# class UserLogoutAPIView(APIView):
-  
-#     authentication_classes = [JWTAuthentication]
-
-#     def post(self, request, *args, **kwargs):
-#         try:
-#             # Blacklist the currently used access token
-#             token = request.auth
-#             if token:
-#                 token.blacklist()
-#                 return Response({"detail": "Successfully logged out."}, status=status.HTTP_200_OK)
-#             else:
-#                 return Response({"detail": "No token provided."}, status=status.HTTP_400_BAD_REQUEST)
-#         except Exception as e:
-#             return Response({"detail": "Failed to logout."}, status=status.HTTP_400_BAD_REQUEST)
-
-
+# ----------------------------------------------------------------
 class CategoryListCreateAPIView(generics.ListCreateAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
@@ -197,6 +219,13 @@ class CategoryListCreateAPIView(generics.ListCreateAPIView):
 
 class BudgetCreateAPIView(generics.CreateAPIView):
     serializer_class = BudgetSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response({"message": "Budget created successfully"}, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -207,15 +236,36 @@ class BudgetRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = BudgetSerializer
 
 
-class GoalListCreateAPIView(generics.ListCreateAPIView):
-    queryset = Goal.objects.all()
+class GoalCreateView(generics.CreateAPIView):
     serializer_class = GoalSerializer
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        user = self.request.user
+        serializer.save(user=user)  
+        
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response({'message': 'Your Goal created successfully'}, status=status.HTTP_201_CREATED)
 
 
-class GoalRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
+class GoalListView(generics.ListAPIView):
+    serializer_class = GoalSerializer
+    
+    def get_queryset(self):
+        user = self.request.user
+        return Goal.objects.filter(account__user=user)
+    
+
+class GoalUpdateView(generics.UpdateAPIView):
     queryset = Goal.objects.all()
     serializer_class = GoalSerializer
 
+class GoalDeleteView(generics.DestroyAPIView):
+    queryset = Goal.objects.all()
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response({'message': 'Goal deleted successfully'}, status=status.HTTP_204_NO_CONTENT)

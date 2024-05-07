@@ -14,26 +14,21 @@ from django.db.models import F,Sum
 from django.core.mail import send_mail
 from django.conf import settings
 from django.shortcuts import get_object_or_404
+from accounts.permissions import IsStaffUser
+from rest_framework.pagination import LimitOffsetPagination
+from django.http import HttpResponse
+from .utils import generate_account_statement_pdf
+from datetime import datetime
 
 
 class CreateAccountAPIView(APIView):
 
-    MAX_ACCOUNTS_PER_TYPE = 4
-
-    def generate_account_number(self):
-        return ''.join(["{}".format(randint(0, 9)) for num in range(0, 10)])
+    MAX_ACCOUNTS_PER_TYPE = 13
 
     def check_account_limit(self, user_profile, account_type):
         existing_count = Account.objects.filter(user=user_profile, account_type=account_type).count()
         if existing_count >= self.MAX_ACCOUNTS_PER_TYPE:
             raise ValidationError(f'Maximum {self.MAX_ACCOUNTS_PER_TYPE} accounts allowed for {account_type} account type')
-
-    def get_account_type(self, account_number):
-        try:
-            account = Account.objects.get(account_number=account_number)
-            return account.account_type
-        except Account.DoesNotExist:
-            return None
 
     def post(self, request):
         serializer = AccountSerializer(data=request.data)
@@ -50,9 +45,7 @@ class CreateAccountAPIView(APIView):
                         self.check_account_limit(user_profile, account_type)
                     except ValidationError as e:
                         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-                    account_number = self.generate_account_number()
-                    serializer.validated_data['account_number'] = account_number
+                    
                     account = serializer.save()
 
                     if account_type in ['savings', 'current']:
@@ -64,20 +57,25 @@ class CreateAccountAPIView(APIView):
                         if account_serializer.is_valid():
                             account_serializer.validated_data['account'] = account
                             account_serializer.save()
-                            return Response({'your account number': account_number, 'message': 'Account created successfully'}, status=status.HTTP_201_CREATED)
+                            response_data = {
+                                'message': 'Account created successfully',
+                                'Your account number is': account.account_number  
+                            }
+                            return Response(response_data, status=status.HTTP_201_CREATED)
                         else:
                             account.delete()
                             return Response(account_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                    elif account_type in ['fixed_deposit', 'recurring_deposit']:
+                        source_account_id = request.data.get('source_account_id')  # Assuming source_account_id is provided in request data
+                        try:
+                            source_account = Account.objects.get(id=source_account_id, user=user_profile)
+                        except Account.DoesNotExist:
+                            return Response({'error': 'Invalid account ID.'}, status=status.HTTP_400_BAD_REQUEST)
                         
-                    if account_type in ['fixed_deposit', 'recurring_deposit']:
-                        source_account_number = request.data.get('account_number')
-                        source_account_type = self.get_account_type(source_account_number)
+                        source_account_type = source_account.account_type
                         if source_account_type not in ['savings', 'current']:
-                            account.delete()
-                            return Response({'error': f' Check your account number. '}, status=status.HTTP_400_BAD_REQUEST)
-                        source_account_id = Account.objects.get(account_number=source_account_number).id
-
-                        deposit_account_data = {'account': account} 
+                            return Response({'error': 'Selected account is not a savings or current account.'}, status=status.HTTP_400_BAD_REQUEST)
+                        
                         if account_type == 'fixed_deposit':
                             serializer = FixedDepositAccountSerializer(data=request.data)
                         elif account_type == 'recurring_deposit':
@@ -86,19 +84,18 @@ class CreateAccountAPIView(APIView):
                         if serializer.is_valid():
                             serializer.validated_data['account'] = account
                             serializer.validated_data['source_account_id'] = source_account_id
-    
-                            deposit_account_instance = serializer.save()
-                            return Response({'Reference Number': account_number, 'message': 'Account created successfully'}, status=status.HTTP_201_CREATED)
+                            serializer.save()
+                            response_data = {
+                                'message': 'Account created successfully',
+                                'Your account number is': account.account_number  
+                            }
+                            return Response(response_data, status=status.HTTP_201_CREATED)
                         else:
-                            account.delete()
                             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-                    return Response({'your account number': account_number, 'message': 'Account created successfully'}, status=status.HTTP_201_CREATED)
-                else:
-                    return Response({'error': 'Account type is required'}, status=status.HTTP_400_BAD_REQUEST)
-            else:
-                return Response({'error': 'User profile does not exist'}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                    else:
+                        return Response({'error': 'User profile does not exist'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class OpenedAccountListAPIView(generics.ListAPIView):
@@ -109,140 +106,220 @@ class OpenedAccountListAPIView(generics.ListAPIView):
         return Account.objects.filter(user=user)
 
 
-class AccountBalanceAPIView(generics.RetrieveAPIView):
-    serializer_class = AccountBalanceSerializer
+class AccountInfoAPIView(generics.ListCreateAPIView):
+    queryset = AccountInfo.objects.all()
+    serializer_class = AccountInfoSerializer
+    permission_classes = [IsAdminUser]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response({'message': 'Account info created successfully.'}, status=status.HTTP_201_CREATED)
+
+class AccountInfoDeleteView(generics.DestroyAPIView):
+    queryset = AccountInfo.objects.all()
+    serializer_class = AccountInfoSerializer
+    permission_classes = [IsAdminUser]
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response({'message': 'Account info deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
+    
+class AccountInfoDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = AccountInfo.objects.all()
+    serializer_class = AccountInfoSerializer
+    permission_classes = [IsAdminUser] 
+    
+
+class AuthAccountListView(generics.ListAPIView):
+    queryset = Account.objects.all()
+    serializer_class = AccountSerializer
+    permission_classes = [IsAdminUser | IsStaffUser]
+    pagination_class = LimitOffsetPagination
 
     def get_queryset(self):
-        user = self.request.user
-        return Account.objects.filter(user=user)
+        queryset = super().get_queryset()
+        
+        name = self.request.query_params.get('name')
+        account_number = self.request.query_params.get('account_number')
+        
+        if name:
+            queryset = queryset.filter(user__username__icontains=name)
+        if account_number:
+            queryset = queryset.filter(account_number=account_number)
 
-    def retrieve(self, request, *args, **kwargs):
+        return queryset
+    
+class AccountDeleteView(generics.DestroyAPIView):
+    queryset = Account.objects.all()
+    serializer_class = AccountSerializer
+    permission_classes = [IsAdminUser | IsStaffUser]
+
+
+    def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        serializer = self.get_serializer(instance)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        self.perform_destroy(instance)
+        return Response({'message': 'Account deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
+
+# -------------------------------------->Transactions<---------------------------------------------------------
 
 
 class DepositFundsAPIView(APIView):
     def post(self, request):
-        saving_account_id = request.data.get('saving_account_id')
-        account_number = request.data.get('account_number')
+        account_id = request.data.get('account_id')
         deposit_amount = request.data.get('deposit_amount')
-        duration_months = request.data.get('duration_months')
 
         try:
-            saving_account = Account.objects.get(id=saving_account_id)
+            account = Account.objects.get(id=account_id)
         except Account.DoesNotExist:
-            return Response({'error': 'Saving account not found'}, status=status.HTTP_404_NOT_FOUND)
-        
+            return Response({'error': 'Account not found'}, status=status.HTTP_404_NOT_FOUND)
+
         if deposit_amount <= 0:
             return Response({'error': 'Deposit amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if saving_account.amount < deposit_amount:
-            return Response({'error': 'Insufficient funds in the saving account'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
+        with transaction.atomic():
+            source_account = account
+            if account.account_type == 'fixed_deposit':
+                try:
+                    fd_instance = FixedDepositAccount.objects.get(account=account)
+                except FixedDepositAccount.DoesNotExist:
+                    return Response({'error': 'Fixed deposit account not found'}, status=status.HTTP_404_NOT_FOUND)
+                
+               
+                source_account_id = fd_instance.source_account_id
+            elif account.account_type == 'recurring_deposit':
+                try:
+                    rd_instance = RecurringDepositAccount.objects.get(account=account)
+                except RecurringDepositAccount.DoesNotExist:
+                    return Response({'error': 'Recurring deposit account not found'}, status=status.HTTP_404_NOT_FOUND)
+                
+                source_account_id = rd_instance.source_account_id
+            else:
+                return Response({'error': 'Unsupported account type'}, status=status.HTTP_400_BAD_REQUEST)
             
-            destination_account = Account.objects.get(account_number=account_number)
-        except Account.DoesNotExist:
-            return Response({'error': 'Destination account not found'}, status=status.HTTP_404_NOT_FOUND)
-
-        
-        if destination_account.account_type == 'fixed_deposit':
             try:
-                deposit_account = FixedDepositAccount.objects.get(account=destination_account)
-            except FixedDepositAccount.DoesNotExist:
-                return Response({'error': 'Fixed Deposit account not found'}, status=status.HTTP_404_NOT_FOUND)
+                source_account = Account.objects.get(id=source_account_id)
+            except Account.DoesNotExist:
+                return Response({'error': 'Source account not found'}, status=status.HTTP_404_NOT_FOUND)
             
-            if deposit_account.duration_months <= 0:
-                return Response({'error': 'Fixed Deposit account duration has expired'}, status=status.HTTP_400_BAD_REQUEST)
+            if source_account.amount < deposit_amount:
+                return Response({'error': 'Insufficient funds in the source account'}, status=status.HTTP_400_BAD_REQUEST)
+            source_account.amount -= deposit_amount
+            source_account.save()
 
-            if deposit_account.deposit_amount > 0:
-                return Response({'error': 'Additional deposit not allowed for an existing Fixed Deposit account'}, status=status.HTTP_400_BAD_REQUEST)
+            account.amount += deposit_amount
+            account.save()
 
-           
-            duration_timedelta = timedelta(days=duration_months * 30)  
+            transaction_log = Transaction.objects.create(
+                user=request.user, 
+                amount=deposit_amount,
+                sender_id=source_account_id,
+                receiver_id=account_id,
+                description='Funds deposited into FD account'
+            )
 
-            deposit_account.deposit_amount = deposit_amount
-            deposit_account.duration_months = duration_months
-            deposit_account.expiry_date = timezone.now() + duration_timedelta  
-            deposit_account.save()
-        elif destination_account.account_type == 'recurring_deposit':
-            try:
-                deposit_account = RecurringDepositAccount.objects.get(account=destination_account)
-            except RecurringDepositAccount.DoesNotExist:
-                return Response({'error': 'Recurring Deposit account not found'}, status=status.HTTP_404_NOT_FOUND)
-            
-            if deposit_account.duration_months <= 0:
-                return Response({'error': 'Recurring Deposit account duration has expired'}, status=status.HTTP_400_BAD_REQUEST)
-            
-            
+        return Response({'message': 'Deposit successful'}, status=status.HTTP_200_OK)
 
-            if deposit_amount != deposit_account.intial_amount:
-                return Response({'error': 'Deposit amount must match the monthly deposit amount for a recurring deposit account'}, status=status.HTTP_400_BAD_REQUEST)
-            
-
-            with transaction.atomic():
-                saving_account.amount -= deposit_amount
-                saving_account.save()
-
-                deposit_account.deposit_amount += deposit_amount
-                deposit_account.save()
-            
-            deposit_account.duration_months -= 1
-            deposit_account.save()
-        else:
-            return Response({'error': 'Invalid deposit type'}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response({'message': f'Money deposited successfully into {destination_account.account_type.capitalize()} account'}, status=status.HTTP_200_OK)
-            
 
 class WithdrawAPIView(APIView):
     @transaction.atomic
     def post(self, request):
-        account_number = request.data.get('account_number')
-        amount = request.data.get('amount')
+        account_id = request.data.get('account_id')
 
         try:
-            account = Account.objects.select_for_update().get(account_number=account_number)
+            account = Account.objects.select_for_update().get(id=account_id)
         except Account.DoesNotExist:
             return Response({"error": "Account does not exist"}, status=status.HTTP_404_NOT_FOUND)
 
-        if account.amount < amount:
-            return Response({"error": "Insufficient funds in the account"}, status=status.HTTP_400_BAD_REQUEST)
+        if account.account_type == 'recurring_deposit':
+            try:
+                recurring_deposit_account = RecurringDepositAccount.objects.get(account=account)
+            except RecurringDepositAccount.DoesNotExist:
+                return Response({"error": "Recurring deposit account not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        account.amount -= amount
-        account.save()
+            if recurring_deposit_account.years > 0 or recurring_deposit_account.months > 0:
+                return Response({"error": "Duration not over for recurring deposit account"}, status=status.HTTP_400_BAD_REQUEST)
 
-        transaction_instance = Transaction.objects.create(sender=account, amount=amount, transaction_date=timezone.now(), description="Withdrawal", status="Completed")
-        serializer = TransactionSerializer(transaction_instance)
+            initial_amount = recurring_deposit_account.initial_amount
+            total_amount = initial_amount
 
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+            account.amount -= total_amount
+            account.save()
 
+            linked_account_id = recurring_deposit_account.source_account_id
+            try:
+                linked_account = Account.objects.select_for_update().get(id=linked_account_id)
+            except Account.DoesNotExist:
+                return Response({"error": "Linked account not found"}, status=status.HTTP_404_NOT_FOUND)
+            
+            linked_account.amount += total_amount
+            linked_account.save()
+            Transaction.objects.create(sender=account, receiver=linked_account, amount=total_amount, transaction_date=timezone.now(), description="Withdrawal from recurring deposit account", status="Completed")
+
+            return Response({"message": "Withdrawal successful", "amount": total_amount}, status=status.HTTP_201_CREATED)
+        
+        elif account.account_type == 'fixed_deposit':
+            try:
+                fixed_deposit_account = FixedDepositAccount.objects.get(account=account)
+            except FixedDepositAccount.DoesNotExist:
+                return Response({"error": "Fixed deposit account not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            if fixed_deposit_account.years > 0 or fixed_deposit_account.months > 0:
+                return Response({"error": "Duration not over for fixed deposit account"}, status=status.HTTP_400_BAD_REQUEST)
+
+            initial_amount = fixed_deposit_account.intial_amount
+            total_amount = initial_amount
+
+            account.amount -= total_amount
+            account.save()
+
+            linked_account_id = fixed_deposit_account.source_account_id
+            try:
+                linked_account = Account.objects.select_for_update().get(id=linked_account_id)
+            except Account.DoesNotExist:
+                return Response({"error": "Linked account not found"}, status=status.HTTP_404_NOT_FOUND)
+            
+            linked_account.amount += total_amount
+            linked_account.save()
+
+            Transaction.objects.create(sender=account, receiver=linked_account, amount=total_amount, transaction_date=timezone.now(), description="Withdrawal from fixed deposit account", status="Completed",user=request.user)
+
+            return Response({"message": "Withdrawal successful", "amount": total_amount}, status=status.HTTP_201_CREATED)
+        
+        else:
+            return Response({"error": "Withdrawal not supported for this account type"}, status=status.HTTP_400_BAD_REQUEST)
 
 class FundTransferAPIView(APIView):
     @transaction.atomic
     def post(self, request):
-        
         sender_account_id = request.data.get('sender')
         receiver_account_number = request.data.get('receiver')
         amount = request.data.get('amount')
-
+        logged_in_user = request.user
         try:
-            sender_account = Account.objects.select_for_update().get(id=sender_account_id)
+            sender_account = Account.objects.select_for_update().get(id=sender_account_id, user=logged_in_user)
             receiver_account = Account.objects.select_for_update().get(account_number=receiver_account_number)
         except Account.DoesNotExist:
             return Response({"error": "Sender or receiver account does not exist"}, status=status.HTTP_404_NOT_FOUND)
 
         if sender_account.account_type in ['fixed_deposit', 'recurring_deposit']:
-            return Response({"error": "Cannot transfer funds from f{account_type}"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Cannot transfer funds"}, status=status.HTTP_400_BAD_REQUEST)
+        if receiver_account.account_type in ['fixed_deposit', 'recurring_deposit']:
+            return Response({"error": "Cannot transfer funds to fixed deposit or recurring deposit accounts"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        account_info = AccountInfo.objects.first()  
+
         if sender_account.account_type == 'savings':
             today = date.today()
-            month_transactions = Transaction.objects.filter(sender=sender_account, transaction_date__month=today.month).count()
-            if month_transactions >= 5:
-                return Response({"error": "Transaction limit exceeded for this month"}, status=status.HTTP_400_BAD_REQUEST)
+            today_transactions = Transaction.objects.filter(sender=sender_account, transaction_date__date=today)
 
-            today_transactions_amount = Transaction.objects.filter(sender=sender_account, transaction_date__date=today).aggregate(total_amount=Sum('amount'))['total_amount']
-            if today_transactions_amount and (today_transactions_amount + amount) > 200000:
+            if today_transactions.count() >= account_info.transaction_limit:
+                return Response({"error": "Transaction limit exceeded for today"}, status=status.HTTP_400_BAD_REQUEST)
+
+            today_transactions_amount = today_transactions.aggregate(total_amount=Sum('amount'))['total_amount']
+            if today_transactions_amount and (today_transactions_amount + amount) > account_info.max_transaction_amount:
                 return Response({"error": "Daily transaction amount limit exceeded"}, status=status.HTTP_400_BAD_REQUEST)
 
             sender_account.transaction_count = F('transaction_count') + 1
@@ -259,9 +336,8 @@ class FundTransferAPIView(APIView):
         receiver_account.amount += amount
         receiver_account.save()
 
-        transaction_instance = Transaction.objects.create( sender=sender_account, receiver=receiver_account, amount=amount,user=request.user)
+        transaction_instance = Transaction.objects.create(sender=sender_account, receiver=receiver_account, amount=amount, user=logged_in_user)
         serializer = TransactionSerializer(transaction_instance)
-
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -269,21 +345,58 @@ class FundTransferAPIView(APIView):
 class TransactionListAPIView(generics.ListAPIView):
     queryset = Transaction.objects.all()
     serializer_class = TransactionSerializer
+    pagination_class = LimitOffsetPagination
 
 
-class AccountInfoAPIView(generics.ListCreateAPIView):
-    queryset = AccountInfo.objects.all()
-    serializer_class = AccountInfoSerializer
-    permission_classes = [IsAdminUser]
+class AccountBalanceAPIView(generics.RetrieveAPIView):
+    serializer_class = AccountBalanceSerializer
 
-    def perform_create(self, serializer):
-        serializer.save() 
+    def get_queryset(self):
+        user = self.request.user
+        return Account.objects.filter(user=user)
 
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        
+        if instance.account_type in ['savings', 'current']:
+            serializer = self.get_serializer(instance)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        else:
+            message = "Your account balance information is not available."
+            return Response({'message': message}, status=status.HTTP_200_OK)
+        
 
-class AccountInfoDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = AccountInfo.objects.all()
-    serializer_class = AccountInfoSerializer
-    permission_classes = [IsAdminUser] 
+class DownloadAccountStatement(APIView):
+    def get(self, request, account_id):
+        authenticated_user = request.user
+        try:
+            account = Account.objects.get(id=account_id, user=authenticated_user)
+        except Account.DoesNotExist:
+            return Response({"detail": "Account does not exist or you are not authorized to access it."}, status=status.HTTP_404_NOT_FOUND)
+
+        start_date_str = request.GET.get('start_date')
+        end_date_str = request.GET.get('end_date')
+
+        if start_date_str and end_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+            except ValueError:
+                return HttpResponse("Invalid date format. Please use YYYY-MM-DD format.", status=400)
+
+            transactions = Transaction.objects.filter(sender=account, transaction_date__range=(start_date, end_date))
+
+            pdf_buffer = generate_account_statement_pdf(transactions)  
+
+            response = HttpResponse(content_type='application/pdf')
+            response['Content-Disposition'] = 'attachment; filename="account_statement.pdf"'
+            pdf_buffer.seek(0)
+            response.write(pdf_buffer.getvalue())
+
+            return response
+        else:
+            return HttpResponse("Please provide both start_date and end_date parameters.", status=400)
+
 # -----------------------------------------------------------------------------------------------------------------------------------------------------<>
                                     # LOANApplication
 # -----------------------------------------------------------------------------------------------------------------------------------------------------<>
@@ -298,6 +411,13 @@ class LoanTypeCreate(generics.ListCreateAPIView):
 class LoanApplicationCreate(generics.ListCreateAPIView):
     queryset = LoanApplication.objects.all()
     serializer_class = LoanApplicationSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response({"message": "You are successfully applied."}, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -336,7 +456,7 @@ class UserLoanApplicationList(generics.ListAPIView):
         user = self.request.user
         return LoanApplication.objects.filter(user=user)
 
-    
+
 class UserLoanApplicationDetail(generics.RetrieveAPIView):
     serializer_class = LoanApplicationSerializer
 
@@ -348,3 +468,5 @@ class UserLoanApplicationDetail(generics.RetrieveAPIView):
         queryset = self.get_queryset()
         obj = get_object_or_404(queryset, id=self.kwargs['pk'])
         return obj
+
+

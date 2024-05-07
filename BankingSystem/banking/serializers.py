@@ -8,34 +8,27 @@ class AccountSerializer(serializers.ModelSerializer):
         exclude = ['account_number','user']
 
 
+
 class SavingsAccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = SavingAccount
         exclude = ['account']
 
 
+
 class CurrentAccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = CurrentAccount
         exclude = ['account']
-
+    
 
 class FixedDepositAccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = FixedDepositAccount
-        exclude = ['account','source_account_id','deposit_amount']
+        exclude = ['account','source_account_id']
 
-    def validate_duration_months(self, value):
-        
-        min_duration = 7
-        max_duration = 10 * 12 * 30  
-        
-        if value < min_duration or value > max_duration:
-            raise serializers.ValidationError("Duration must be between 7 days and 10 years.Please contact the bank for assistance.")
 
-        return value
-
-    def validate_deposit_amount(self, value):
+    def validate_intial_amount(self, value):
         if value < 1000:
             raise serializers.ValidationError("Deposit amount must be 1000 or more for fixed deposit accounts.")
         return value
@@ -46,10 +39,6 @@ class RecurringDepositAccountSerializer(serializers.ModelSerializer):
         model = RecurringDepositAccount
         exclude = ['account','source_account_id']
 
-    def validate_intial_amount(self, value):
-        if value < 100:
-            raise serializers.ValidationError("Minimum deposit amount for recurring deposit accounts is Rs. 100 per month.")
-        return value
     
     def validate_duration_months(self, value):
         min_duration = 6
@@ -57,7 +46,7 @@ class RecurringDepositAccountSerializer(serializers.ModelSerializer):
         if value < min_duration or value > max_duration:
             raise serializers.ValidationError("Duration for recurring deposit accounts must be between 6 months and 10 years (120 months).")
         return value
-
+    
 
 class AccountBalanceSerializer(serializers.ModelSerializer):
     amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
@@ -82,6 +71,8 @@ class AccountInfoSerializer(serializers.ModelSerializer):
         model = AccountInfo
         fields = '__all__'
 
+# ------------------------------------->Transaction<------------------------------------
+
 
 class TransactionSerializer(serializers.ModelSerializer):
     class Meta:
@@ -97,7 +88,7 @@ class WithdrawalSerializer(serializers.Serializer):
             raise serializers.ValidationError("Amount must be greater than zero.")
         return value
 
-# -----------------------------------------------------------------------------------------------
+# ----------------------------------------->Loan<---------------------------------------------
 
 class LoanApplicationSerializer(serializers.ModelSerializer):
     class Meta:
@@ -114,8 +105,8 @@ class LoanApplicationSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("The loan amount must not exceed ₹1 crore.")
 
         return value
-   
-        
+
+
 class LoanTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = LoanType

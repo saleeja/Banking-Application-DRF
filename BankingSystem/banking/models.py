@@ -10,6 +10,13 @@ from django.dispatch import receiver
 from django.core.mail import send_mail
 from django.db import models
 from banking.models import *
+import random
+
+class AccountInfo(models.Model):
+    fixed_interest_rate = models.DecimalField(max_digits=5, decimal_places=2)
+    recurring_interest_rate = models.DecimalField(max_digits=5, decimal_places=2)
+    transaction_limit = models.IntegerField(default=5)
+    max_transaction_amount = models.DecimalField(max_digits=10, decimal_places=2)
 
 
 class Account(models.Model):
@@ -23,8 +30,14 @@ class Account(models.Model):
     account_type = models.CharField(max_length=20, choices=ACCOUNT_TYPES)
     account_number = models.CharField(max_length=12, unique=True,blank=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2,default=0)
+    transaction_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if not self.account_number:
+            self.account_number = ''.join([str(random.randint(0, 9)) for _ in range(11)])
+        super().save(*args, **kwargs)
 
 
 class SavingAccount(models.Model):
@@ -44,8 +57,8 @@ class CurrentAccount(models.Model):
    
 class RecurringDepositAccount(models.Model):
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='recurring_deposit_account')
-    deposit_amount = models.DecimalField(max_digits=10, decimal_places=2,default=0)
-    duration_months = models.PositiveIntegerField() 
+    years = models.IntegerField(default=0) 
+    months = models.IntegerField(default=0) 
     source_account_id = models.PositiveIntegerField()
     intial_amount =models.DecimalField(max_digits=10, decimal_places=2)
 
@@ -55,22 +68,13 @@ class RecurringDepositAccount(models.Model):
 
 class FixedDepositAccount(models.Model):
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='fixed_deposit_account')
-    duration_months = models.PositiveIntegerField()  
-    deposit_amount=models.DecimalField(max_digits=10, decimal_places=2,default=0)
+    years = models.IntegerField(default=0) 
+    months = models.IntegerField(default=0) 
+    intial_amount =models.DecimalField(max_digits=10, decimal_places=2)
     source_account_id = models.PositiveIntegerField()
     
-
     def __str__(self):
         return f"Fixed Deposit Account: {self.account.account_number}"
-
-
-class AccountInfo(models.Model):
-    account = models.OneToOneField(Account, on_delete=models.CASCADE)
-    fixed_interest_rate = models.DecimalField(max_digits=5, decimal_places=2)
-    recurring_interest_rate = models.DecimalField(max_digits=5, decimal_places=2)
-    transaction_limit = models.IntegerField(default=5)
-    max_transaction_amount = models.DecimalField(max_digits=10, decimal_places=2)
-    min_deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
 
 class Transaction(models.Model):
@@ -88,14 +92,11 @@ class Transaction(models.Model):
 @receiver(post_save, sender=Transaction)
 def check_transaction_budget(sender, instance, created, **kwargs):
     if created:
-        # Check if the receiver has a CurrentAccount
         current_account = CurrentAccount.objects.filter(account=instance.receiver).first()
         if current_account:
-            # Retrieve the budget for the business category
             budget = Budget.objects.filter(user=instance.user, category__name=current_account.business_category).first()
             if budget and instance.amount > budget.total_budget:
-                # Send email alert
-                subject = f"Budget Exceeded for {current_account.business_category}"
+                subject = f"Exceeded for {current_account.business_category}"
                 message = f"You have exceeded your budget for {current_account.business_category}. Total spent: {instance.amount}, Budget: {budget.total_budget}"
                 send_mail(subject, message, settings.EMAIL_HOST_USER, [instance.user.email], fail_silently=False)
     

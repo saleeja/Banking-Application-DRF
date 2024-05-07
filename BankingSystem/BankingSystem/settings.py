@@ -22,7 +22,7 @@ INSTALLED_APPS = [
 
  
     'rest_framework',
-    "django_extensions",
+    # "django_extensions",
 
 ]
 
@@ -129,4 +129,5 @@ EMAIL_HOST_USER = '9d7dcc14f17e5b'
 EMAIL_HOST_PASSWORD = '554acca983b614'
 EMAIL_PORT = '2525'
 EMAIL_USE_TLS = True
+
 
